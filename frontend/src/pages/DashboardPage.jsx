@@ -26,6 +26,8 @@ const taskStatusActions = [
 ];
 
 const completionSoundUrl = `${import.meta.env.BASE_URL}TaskCompleteSound.mp3`;
+const neutralSoundUrl = `${import.meta.env.BASE_URL}NeutralClick.mp3`;
+const warningSoundUrl = `${import.meta.env.BASE_URL}WarningSound.mp3`;
 
 function getAssigneeLabel(task, user) {
   if (!task.assignee) {
@@ -42,6 +44,7 @@ function getAssigneeLabel(task, user) {
 export default function DashboardPage() {
   const { token, user, signOut } = useAuth();
   const completionAudioRef = useRef(null);
+  const warningAudioRef = useRef(null);
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -49,12 +52,18 @@ export default function DashboardPage() {
   const [projectForm, setProjectForm] = useState(initialProjectForm);
   const [taskForm, setTaskForm] = useState(initialTaskForm);
   const [editingTaskId, setEditingTaskId] = useState(null);
+  const [pendingDeleteItem, setPendingDeleteItem] = useState(null);
   const [error, setError] = useState("");
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isBusy, setIsBusy] = useState(false);
 
   const selectedProject =
     projects.find((project) => String(project.id) === String(selectedProjectId)) || null;
+
+  const playNeutralSound = () => {
+    const audio = new Audio(neutralSoundUrl);
+    audio.play().catch(() => {});
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -164,6 +173,7 @@ export default function DashboardPage() {
 
   const handleCreateProject = async (event) => {
     event.preventDefault();
+    playNeutralSound();
     setIsBusy(true);
     setError("");
 
@@ -186,6 +196,7 @@ export default function DashboardPage() {
 
     try {
       await api.deleteProject(token, projectId);
+      setPendingDeleteItem(null);
       const nextProjects = projects.filter((project) => project.id !== projectId);
       setProjects(nextProjects);
       const nextSelectedProject = nextProjects[0] ? String(nextProjects[0].id) : "";
@@ -207,6 +218,7 @@ export default function DashboardPage() {
       return;
     }
 
+    playNeutralSound();
     setIsBusy(true);
     setError("");
 
@@ -235,6 +247,7 @@ export default function DashboardPage() {
 
     try {
       await api.deleteTask(token, taskId);
+      setPendingDeleteItem(null);
 
       if (editingTaskId === taskId) {
         resetTaskComposer();
@@ -248,7 +261,47 @@ export default function DashboardPage() {
     }
   };
 
+  const handlePromptDeleteTask = (task) => {
+    setPendingDeleteItem({
+      type: "task",
+      id: task.id,
+      title: task.title,
+    });
+
+    if (warningAudioRef.current) {
+      warningAudioRef.current.currentTime = 0;
+      warningAudioRef.current.play().catch(() => {});
+    }
+  };
+
+  const handlePromptDeleteProject = (project) => {
+    setPendingDeleteItem({
+      type: "project",
+      id: project.id,
+      title: project.name,
+    });
+
+    if (warningAudioRef.current) {
+      warningAudioRef.current.currentTime = 0;
+      warningAudioRef.current.play().catch(() => {});
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!pendingDeleteItem) {
+      return;
+    }
+
+    if (pendingDeleteItem.type === "project") {
+      await handleDeleteProject(pendingDeleteItem.id);
+      return;
+    }
+
+    await handleDeleteTask(pendingDeleteItem.id);
+  };
+
   const handleStatusUpdate = async (taskId, nextStatus) => {
+    playNeutralSound();
     setIsBusy(true);
     setError("");
 
@@ -287,6 +340,7 @@ export default function DashboardPage() {
   };
 
   const handleAssignToMe = async (taskId) => {
+    playNeutralSound();
     setIsBusy(true);
     setError("");
 
@@ -301,11 +355,37 @@ export default function DashboardPage() {
   };
 
   const handleEditTask = (task) => {
+    playNeutralSound();
     setEditingTaskId(task.id);
     setTaskForm({
       title: task.title,
       description: task.description || "",
     });
+  };
+
+  const handleSelectProject = (projectId) => {
+    playNeutralSound();
+    setSelectedProjectId(String(projectId));
+  };
+
+  const handleCancelDelete = () => {
+    playNeutralSound();
+    setPendingDeleteItem(null);
+  };
+
+  const handleCancelEdit = () => {
+    playNeutralSound();
+    resetTaskComposer();
+  };
+
+  const handleStatusFilterChange = (event) => {
+    playNeutralSound();
+    setStatusFilter(event.target.value);
+  };
+
+  const handleSignOut = () => {
+    playNeutralSound();
+    signOut();
   };
 
   if (isBootstrapping) {
@@ -319,6 +399,29 @@ export default function DashboardPage() {
   return (
     <div className="dashboard-shell">
       <audio preload="auto" ref={completionAudioRef} src={completionSoundUrl} />
+      <audio preload="auto" ref={warningAudioRef} src={warningSoundUrl} />
+
+      {pendingDeleteItem ? (
+        <div className="modal-overlay" role="presentation">
+          <div aria-labelledby="delete-item-title" aria-modal="true" className="confirm-modal glass-panel" role="dialog">
+            <span className="eyebrow">Confirm Delete</span>
+            <h2 id="delete-item-title">Delete this {pendingDeleteItem.type}?</h2>
+            <p className="muted-copy">
+              {pendingDeleteItem.type === "project"
+                ? `${pendingDeleteItem.title} and all of its actions will be removed permanently.`
+                : `${pendingDeleteItem.title} will be removed permanently.`}
+            </p>
+            <div className="modal-actions">
+              <button className="danger-link" disabled={isBusy} onClick={handleConfirmDelete} type="button">
+                {pendingDeleteItem.type === "project" ? "Delete Focus Area" : "Delete Task"}
+              </button>
+              <button className="ghost-button" disabled={isBusy} onClick={handleCancelDelete} type="button">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <header className="top-bar">
         <div>
@@ -333,7 +436,7 @@ export default function DashboardPage() {
             <strong>{user?.name}</strong>
             <span>{user?.email}</span>
           </div>
-          <button className="secondary-button" onClick={signOut} type="button">
+          <button className="secondary-button" onClick={handleSignOut} type="button">
             Sign Out
           </button>
         </div>
@@ -384,18 +487,14 @@ export default function DashboardPage() {
                   key={project.id}
                 >
                   <div className="project-card-header">
-                    <button
-                      className="project-select"
-                      onClick={() => setSelectedProjectId(String(project.id))}
-                      type="button"
-                    >
+                    <button className="project-select" onClick={() => handleSelectProject(project.id)} type="button">
                       <strong>{project.name}</strong>
                       <p>{project.description || "No note added yet."}</p>
                     </button>
                     <button
                       className="danger-link"
                       disabled={isBusy}
-                      onClick={() => handleDeleteProject(project.id)}
+                      onClick={() => handlePromptDeleteProject(project)}
                       type="button"
                     >
                       Delete
@@ -419,7 +518,7 @@ export default function DashboardPage() {
 
             <label className="filter-control">
               Status filter
-              <select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}>
+              <select onChange={handleStatusFilterChange} value={statusFilter}>
                 {statusOptions.map((option) => (
                   <option key={option.value || "all"} value={option.value}>
                     {option.label}
@@ -455,7 +554,7 @@ export default function DashboardPage() {
                 {editingTaskId ? "Save Action" : "Add Action"}
               </button>
               {editingTaskId ? (
-                <button className="link-button" onClick={resetTaskComposer} type="button">
+                <button className="link-button" onClick={handleCancelEdit} type="button">
                   Cancel Edit
                 </button>
               ) : null}
@@ -485,7 +584,7 @@ export default function DashboardPage() {
                       <button
                         className="danger-link"
                         disabled={isBusy}
-                        onClick={() => handleDeleteTask(task.id)}
+                        onClick={() => handlePromptDeleteTask(task)}
                         type="button"
                       >
                         Delete

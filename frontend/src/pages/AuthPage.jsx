@@ -9,6 +9,8 @@ const initialForm = {
   password: "",
 };
 
+const neutralSoundUrl = `${import.meta.env.BASE_URL}NeutralClick.mp3`;
+
 export default function AuthPage() {
   const { token, signIn, signUp } = useAuth();
   const [mode, setMode] = useState("login");
@@ -22,6 +24,11 @@ export default function AuthPage() {
 
   const title = mode === "login" ? "Sign in to your focus space" : "Create your ADHD support account";
 
+  const playNeutralSound = () => {
+    const audio = new Audio(neutralSoundUrl);
+    audio.play().catch(() => {});
+  };
+
   const handleChange = (event) => {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
@@ -29,6 +36,7 @@ export default function AuthPage() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    playNeutralSound();
     setIsSubmitting(true);
     setError("");
 
@@ -46,6 +54,11 @@ export default function AuthPage() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleModeChange = (nextMode) => {
+    playNeutralSound();
+    setMode(nextMode);
   };
 
   return (
@@ -81,14 +94,14 @@ export default function AuthPage() {
           <button
             className={mode === "login" ? "tab-button active" : "tab-button"}
             type="button"
-            onClick={() => setMode("login")}
+            onClick={() => handleModeChange("login")}
           >
             Login
           </button>
           <button
             className={mode === "register" ? "tab-button active" : "tab-button"}
             type="button"
-            onClick={() => setMode("register")}
+            onClick={() => handleModeChange("register")}
           >
             Register
           </button>
