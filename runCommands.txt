@@ -1,0 +1,52 @@
+# ADHD Focus Tracking System - Local Test Commands
+# PowerShell commands for running the app locally.
+# Open separate terminals for backend and frontend.
+
+==================================================
+BACKEND (Terminal 1)
+==================================================
+
+cd d:\Task-Tracking-System\backend
+python -m pip install -r requirements.txt
+uvicorn app.main:app --reload
+
+Backend health check:
+http://127.0.0.1:8000/health
+
+==================================================
+FRONTEND (Terminal 2)
+==================================================
+
+cd d:\Task-Tracking-System\frontend
+& "C:\Program Files\nodejs\npm.cmd" install
+& "C:\Program Files\nodejs\npm.cmd" run dev
+
+Frontend app:
+http://localhost:5173
+
+==================================================
+BACKEND TESTS
+==================================================
+
+cd d:\Task-Tracking-System\backend
+python -m pip install -r requirements-dev.txt
+python -m pytest tests -q
+
+==================================================
+FULL STACK WITH DOCKER
+==================================================
+
+cd d:\Task-Tracking-System
+docker compose up --build
+
+Frontend:
+http://localhost:5173
+
+Backend:
+http://127.0.0.1:8000/health
+
+==================================================
+STOPPING SERVERS
+==================================================
+
+Press Ctrl+C in each terminal running the backend or frontend dev server.

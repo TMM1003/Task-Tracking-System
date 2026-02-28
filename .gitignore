@@ -1,0 +1,12 @@
+.env
+*.pyc
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+backend/.env
+backend/task_tracking.db
+frontend/node_modules/
+frontend/dist/
+
