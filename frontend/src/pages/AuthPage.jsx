@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Navigate } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
+import { useSoundPreferences } from "../hooks/useSoundPreferences";
 
 const initialForm = {
   name: "",
@@ -13,6 +14,7 @@ const neutralSoundUrl = `${import.meta.env.BASE_URL}NeutralClick.mp3`;
 
 export default function AuthPage() {
   const { token, signIn, signUp } = useAuth();
+  const { isMuted, playSound, setIsMuted, setVolume, volume } = useSoundPreferences();
   const [mode, setMode] = useState("login");
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState("");
@@ -24,11 +26,6 @@ export default function AuthPage() {
 
   const title = mode === "login" ? "Sign in to your focus space" : "Create your ADHD support account";
 
-  const playNeutralSound = () => {
-    const audio = new Audio(neutralSoundUrl);
-    audio.play().catch(() => {});
-  };
-
   const handleChange = (event) => {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
@@ -36,7 +33,7 @@ export default function AuthPage() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    playNeutralSound();
+    playSound(neutralSoundUrl);
     setIsSubmitting(true);
     setError("");
 
@@ -57,8 +54,24 @@ export default function AuthPage() {
   };
 
   const handleModeChange = (nextMode) => {
-    playNeutralSound();
+    playSound(neutralSoundUrl);
     setMode(nextMode);
+  };
+
+  const handleToggleMute = () => {
+    if (!isMuted) {
+      playSound(neutralSoundUrl);
+    }
+
+    setIsMuted((current) => !current);
+  };
+
+  const handleVolumeChange = (event) => {
+    setVolume(event.target.value);
+  };
+
+  const handleVolumeCommit = () => {
+    playSound(neutralSoundUrl);
   };
 
   return (
@@ -109,6 +122,25 @@ export default function AuthPage() {
 
         <h2>{title}</h2>
         <p className="muted-copy">Create an account to keep your focus areas and next actions in one place.</p>
+        <div className="sound-preferences sound-preferences-compact">
+          <button className="ghost-button" onClick={handleToggleMute} type="button">
+            {isMuted ? "Unmute Sounds" : "Mute Sounds"}
+          </button>
+          <label className="sound-slider">
+            Volume
+            <input
+              aria-label="Sound volume"
+              max="1"
+              min="0"
+              onChange={handleVolumeChange}
+              onKeyUp={handleVolumeCommit}
+              onPointerUp={handleVolumeCommit}
+              step="0.05"
+              type="range"
+              value={volume}
+            />
+          </label>
+        </div>
 
         <form className="stacked-form" onSubmit={handleSubmit}>
           {mode === "register" ? (

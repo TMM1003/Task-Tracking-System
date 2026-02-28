@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -11,18 +13,32 @@ from ..schemas import TaskCreate, TaskRead, TaskUpdate
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
 def _get_owned_project(project_id: int, user_id: int, db: Session) -> Project:
-    project = db.scalar(select(Project).where(Project.id == project_id, Project.owner_id == user_id))
+    project = db.scalar(
+        select(Project).where(
+            Project.id == project_id,
+            Project.owner_id == user_id,
+            Project.deleted_at.is_(None),
+        )
+    )
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
     return project
 
 
-def _get_owned_task(task_id: int, user_id: int, db: Session) -> Task:
+def _get_owned_task(task_id: int, user_id: int, db: Session, *, include_deleted: bool = False) -> Task:
+    filters = [Task.id == task_id, Project.owner_id == user_id, Project.deleted_at.is_(None)]
+    if not include_deleted:
+        filters.append(Task.deleted_at.is_(None))
+
     task = db.scalar(
         select(Task)
         .join(Project, Task.project_id == Project.id)
-        .where(Task.id == task_id, Project.owner_id == user_id)
+        .where(*filters)
         .options(joinedload(Task.project), joinedload(Task.assignee))
     )
     if not task:
@@ -40,7 +56,11 @@ def list_tasks(
     query = (
         select(Task)
         .join(Project, Task.project_id == Project.id)
-        .where(Project.owner_id == current_user.id)
+        .where(
+            Project.owner_id == current_user.id,
+            Project.deleted_at.is_(None),
+            Task.deleted_at.is_(None),
+        )
         .options(joinedload(Task.assignee))
         .order_by(Task.updated_at.desc())
     )
@@ -70,8 +90,8 @@ def create_task(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignee not found.")
 
     task = Task(
-        title=payload.title.strip(),
-        description=(payload.description.strip() or None) if payload.description is not None else None,
+        title=payload.title,
+        description=payload.description,
         status=payload.status,
         project_id=payload.project_id,
         assignee_id=assignee_id,
@@ -93,11 +113,10 @@ def update_task(
     update_data = payload.model_dump(exclude_unset=True)
 
     if "title" in update_data and update_data["title"] is not None:
-        task.title = update_data["title"].strip()
+        task.title = update_data["title"]
 
     if "description" in update_data:
-        description = update_data["description"]
-        task.description = (description.strip() or None) if description is not None else None
+        task.description = update_data["description"]
 
     if "status" in update_data and update_data["status"] is not None:
         task.status = update_data["status"]
@@ -122,5 +141,22 @@ def delete_task(
     current_user: User = Depends(get_current_user),
 ):
     task = _get_owned_task(task_id, current_user.id, db)
-    db.delete(task)
+    task.deleted_at = _utcnow()
+    db.add(task)
     db.commit()
+
+
+@router.post("/{task_id}/restore", response_model=TaskRead)
+def restore_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    task = _get_owned_task(task_id, current_user.id, db, include_deleted=True)
+    if task.deleted_at is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Task is already active.")
+
+    task.deleted_at = None
+    db.add(task)
+    db.commit()
+    return TaskRead.model_validate(_get_owned_task(task.id, current_user.id, db))

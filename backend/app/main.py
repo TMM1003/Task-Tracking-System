@@ -4,13 +4,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import CORS_ORIGINS
-from .database import Base, engine
+from .database import engine
+from .migrations import run_migrations
 from .routers import auth, projects, tasks
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    run_migrations(engine)
     yield
 
 

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database import Base, get_db
 from app.main import app
+from app.migrations import run_migrations
 
 
 @pytest.fixture()
@@ -19,7 +20,7 @@ def client(tmp_path):
     engine = create_engine(f"sqlite:///{test_db_path}", connect_args={"check_same_thread": False})
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-    Base.metadata.create_all(bind=engine)
+    run_migrations(engine)
 
     def override_get_db():
         db = TestingSessionLocal()

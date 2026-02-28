@@ -79,6 +79,12 @@ export const api = {
       token,
     });
   },
+  restoreProject(token, projectId) {
+    return request(`/projects/${projectId}/restore`, {
+      method: "POST",
+      token,
+    });
+  },
   listTasks(token, params = {}) {
     const query = new URLSearchParams();
 
@@ -110,6 +116,12 @@ export const api = {
   deleteTask(token, taskId) {
     return request(`/tasks/${taskId}`, {
       method: "DELETE",
+      token,
+    });
+  },
+  restoreTask(token, taskId) {
+    return request(`/tasks/${taskId}/restore`, {
+      method: "POST",
       token,
     });
   },

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { useSoundPreferences } from "../hooks/useSoundPreferences";
 
 const initialProjectForm = {
   name: "",
@@ -28,6 +29,7 @@ const taskStatusActions = [
 const completionSoundUrl = `${import.meta.env.BASE_URL}TaskCompleteSound.mp3`;
 const neutralSoundUrl = `${import.meta.env.BASE_URL}NeutralClick.mp3`;
 const warningSoundUrl = `${import.meta.env.BASE_URL}WarningSound.mp3`;
+const undoDisplayMs = 5000;
 
 function getAssigneeLabel(task, user) {
   if (!task.assignee) {
@@ -41,10 +43,19 @@ function getAssigneeLabel(task, user) {
   return `Assigned to ${task.assignee.name} (${task.assignee.email})`;
 }
 
+function resolveSelectedProjectId(projects, preferredProjectId) {
+  const preferredId = preferredProjectId ? String(preferredProjectId) : "";
+
+  if (preferredId && projects.some((project) => String(project.id) === preferredId)) {
+    return preferredId;
+  }
+
+  return projects[0] ? String(projects[0].id) : "";
+}
+
 export default function DashboardPage() {
   const { token, user, signOut } = useAuth();
-  const completionAudioRef = useRef(null);
-  const warningAudioRef = useRef(null);
+  const { isMuted, playSound, setIsMuted, setVolume, volume } = useSoundPreferences();
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -53,16 +64,69 @@ export default function DashboardPage() {
   const [taskForm, setTaskForm] = useState(initialTaskForm);
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [pendingDeleteItem, setPendingDeleteItem] = useState(null);
+  const [undoNotice, setUndoNotice] = useState(null);
   const [error, setError] = useState("");
   const [isBootstrapping, setIsBootstrapping] = useState(true);
-  const [isBusy, setIsBusy] = useState(false);
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [isSavingTask, setIsSavingTask] = useState(false);
+  const [isRestoringUndo, setIsRestoringUndo] = useState(false);
+  const [busyProjectId, setBusyProjectId] = useState(null);
+  const [busyTaskId, setBusyTaskId] = useState(null);
+
+  const deleteTriggerRef = useRef(null);
+  const confirmDeleteButtonRef = useRef(null);
+  const cancelDeleteButtonRef = useRef(null);
 
   const selectedProject =
     projects.find((project) => String(project.id) === String(selectedProjectId)) || null;
 
   const playNeutralSound = () => {
-    const audio = new Audio(neutralSoundUrl);
-    audio.play().catch(() => {});
+    playSound(neutralSoundUrl);
+  };
+
+  const resetTaskComposer = () => {
+    setEditingTaskId(null);
+    setTaskForm(initialTaskForm);
+  };
+
+  const refreshProjects = async (preferredProjectId = selectedProjectId) => {
+    const loadedProjects = await api.listProjects(token);
+    setProjects(loadedProjects);
+    setSelectedProjectId(resolveSelectedProjectId(loadedProjects, preferredProjectId));
+    return loadedProjects;
+  };
+
+  const refreshTasks = async (projectId = selectedProjectId, filter = statusFilter) => {
+    if (!projectId) {
+      setTasks([]);
+      return [];
+    }
+
+    const loadedTasks = await api.listTasks(token, {
+      projectId,
+      status: filter,
+    });
+    setTasks(loadedTasks);
+
+    if (editingTaskId && !loadedTasks.some((task) => task.id === editingTaskId)) {
+      resetTaskComposer();
+    }
+
+    return loadedTasks;
+  };
+
+  const closeDeleteDialog = (shouldPlayNeutral = false, shouldRestoreFocus = true) => {
+    if (shouldPlayNeutral) {
+      playNeutralSound();
+    }
+
+    setPendingDeleteItem(null);
+
+    if (shouldRestoreFocus) {
+      window.requestAnimationFrame(() => {
+        deleteTriggerRef.current?.focus();
+      });
+    }
   };
 
   useEffect(() => {
@@ -76,10 +140,7 @@ export default function DashboardPage() {
         }
 
         setProjects(loadedProjects);
-
-        if (loadedProjects.length > 0) {
-          setSelectedProjectId((current) => current || String(loadedProjects[0].id));
-        }
+        setSelectedProjectId((current) => resolveSelectedProjectId(loadedProjects, current));
       } catch (loadError) {
         if (isMounted) {
           setError(loadError.message);
@@ -99,13 +160,9 @@ export default function DashboardPage() {
   }, [token]);
 
   useEffect(() => {
-    setEditingTaskId(null);
-    setTaskForm(initialTaskForm);
-  }, [selectedProjectId]);
-
-  useEffect(() => {
     if (!selectedProjectId) {
       setTasks([]);
+      resetTaskComposer();
       return;
     }
 
@@ -124,8 +181,7 @@ export default function DashboardPage() {
         setTasks(loadedTasks);
 
         if (editingTaskId && !loadedTasks.some((task) => task.id === editingTaskId)) {
-          setEditingTaskId(null);
-          setTaskForm(initialTaskForm);
+          resetTaskComposer();
         }
       })
       .catch((loadError) => {
@@ -139,27 +195,65 @@ export default function DashboardPage() {
     };
   }, [editingTaskId, selectedProjectId, statusFilter, token]);
 
-  const resetTaskComposer = () => {
-    setEditingTaskId(null);
-    setTaskForm(initialTaskForm);
-  };
-
-  const refreshTasks = async (projectId = selectedProjectId, filter = statusFilter) => {
-    if (!projectId) {
-      setTasks([]);
+  useEffect(() => {
+    if (!pendingDeleteItem) {
       return;
     }
 
-    const loadedTasks = await api.listTasks(token, {
-      projectId,
-      status: filter,
+    window.requestAnimationFrame(() => {
+      confirmDeleteButtonRef.current?.focus();
     });
-    setTasks(loadedTasks);
 
-    if (editingTaskId && !loadedTasks.some((task) => task.id === editingTaskId)) {
-      resetTaskComposer();
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeDeleteDialog(true);
+        return;
+      }
+
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const focusableButtons = [confirmDeleteButtonRef.current, cancelDeleteButtonRef.current].filter(Boolean);
+      if (focusableButtons.length < 2) {
+        return;
+      }
+
+      const firstButton = focusableButtons[0];
+      const lastButton = focusableButtons[focusableButtons.length - 1];
+
+      if (event.shiftKey && document.activeElement === firstButton) {
+        event.preventDefault();
+        lastButton.focus();
+      }
+
+      if (!event.shiftKey && document.activeElement === lastButton) {
+        event.preventDefault();
+        firstButton.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [pendingDeleteItem]);
+
+  useEffect(() => {
+    if (!undoNotice) {
+      return;
     }
-  };
+
+    const timeoutId = window.setTimeout(() => {
+      setUndoNotice(null);
+    }, undoDisplayMs);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [undoNotice]);
 
   const handleProjectField = (event) => {
     const { name, value } = event.target;
@@ -174,39 +268,45 @@ export default function DashboardPage() {
   const handleCreateProject = async (event) => {
     event.preventDefault();
     playNeutralSound();
-    setIsBusy(true);
+    setIsCreatingProject(true);
     setError("");
 
     try {
       const project = await api.createProject(token, projectForm);
-      const nextProjects = [project, ...projects];
-      setProjects(nextProjects);
+      setProjects((current) => [project, ...current]);
       setProjectForm(initialProjectForm);
       setSelectedProjectId(String(project.id));
     } catch (submissionError) {
       setError(submissionError.message);
     } finally {
-      setIsBusy(false);
+      setIsCreatingProject(false);
     }
   };
 
-  const handleDeleteProject = async (projectId) => {
-    setIsBusy(true);
+  const handleDeleteProject = async (project) => {
+    setBusyProjectId(project.id);
     setError("");
 
     try {
-      await api.deleteProject(token, projectId);
-      setPendingDeleteItem(null);
-      const nextProjects = projects.filter((project) => project.id !== projectId);
-      setProjects(nextProjects);
-      const nextSelectedProject = nextProjects[0] ? String(nextProjects[0].id) : "";
-      setSelectedProjectId(nextSelectedProject);
-      setTasks([]);
-      resetTaskComposer();
+      await api.deleteProject(token, project.id);
+      closeDeleteDialog(false, false);
+
+      const removedSelectedProject = String(selectedProjectId) === String(project.id);
+      if (removedSelectedProject) {
+        setTasks([]);
+        resetTaskComposer();
+      }
+
+      await refreshProjects(removedSelectedProject ? "" : selectedProjectId);
+      setUndoNotice({
+        id: project.id,
+        title: project.name,
+        type: "project",
+      });
     } catch (deletionError) {
       setError(deletionError.message);
     } finally {
-      setIsBusy(false);
+      setBusyProjectId(null);
     }
   };
 
@@ -219,7 +319,7 @@ export default function DashboardPage() {
     }
 
     playNeutralSound();
-    setIsBusy(true);
+    setIsSavingTask(true);
     setError("");
 
     try {
@@ -237,54 +337,83 @@ export default function DashboardPage() {
     } catch (submissionError) {
       setError(submissionError.message);
     } finally {
-      setIsBusy(false);
+      setIsSavingTask(false);
     }
   };
 
-  const handleDeleteTask = async (taskId) => {
-    setIsBusy(true);
+  const handleDeleteTask = async (task) => {
+    setBusyTaskId(task.id);
     setError("");
 
     try {
-      await api.deleteTask(token, taskId);
-      setPendingDeleteItem(null);
+      await api.deleteTask(token, task.id);
+      closeDeleteDialog(false, false);
 
-      if (editingTaskId === taskId) {
+      if (editingTaskId === task.id) {
         resetTaskComposer();
       }
 
       await refreshTasks();
+      setUndoNotice({
+        id: task.id,
+        projectId: task.project_id,
+        title: task.title,
+        type: "task",
+      });
     } catch (deletionError) {
       setError(deletionError.message);
     } finally {
-      setIsBusy(false);
+      setBusyTaskId(null);
     }
   };
 
-  const handlePromptDeleteTask = (task) => {
-    setPendingDeleteItem({
-      type: "task",
-      id: task.id,
-      title: task.title,
-    });
+  const handleUndoDelete = async () => {
+    if (!undoNotice) {
+      return;
+    }
 
-    if (warningAudioRef.current) {
-      warningAudioRef.current.currentTime = 0;
-      warningAudioRef.current.play().catch(() => {});
+    playNeutralSound();
+    setIsRestoringUndo(true);
+    setError("");
+
+    try {
+      if (undoNotice.type === "project") {
+        const restoredProject = await api.restoreProject(token, undoNotice.id);
+        await refreshProjects(restoredProject.id);
+      } else {
+        const restoredTask = await api.restoreTask(token, undoNotice.id);
+
+        if (String(restoredTask.project_id) === String(selectedProjectId)) {
+          await refreshTasks();
+        } else {
+          setSelectedProjectId(String(restoredTask.project_id));
+        }
+      }
+
+      setUndoNotice(null);
+    } catch (restoreError) {
+      setError(restoreError.message);
+    } finally {
+      setIsRestoringUndo(false);
     }
   };
 
-  const handlePromptDeleteProject = (project) => {
+  const handlePromptDeleteProject = (project, triggerElement) => {
+    deleteTriggerRef.current = triggerElement;
     setPendingDeleteItem({
+      item: project,
       type: "project",
-      id: project.id,
-      title: project.name,
     });
+    playSound(warningSoundUrl);
+  };
 
-    if (warningAudioRef.current) {
-      warningAudioRef.current.currentTime = 0;
-      warningAudioRef.current.play().catch(() => {});
-    }
+  const handlePromptDeleteTask = (task, triggerElement) => {
+    deleteTriggerRef.current = triggerElement;
+    setPendingDeleteItem({
+      item: task,
+      type: "task",
+    });
+    playSound(warningSoundUrl);
   };
 
   const handleConfirmDelete = async () => {
@@ -293,16 +422,16 @@ export default function DashboardPage() {
     }
 
     if (pendingDeleteItem.type === "project") {
-      await handleDeleteProject(pendingDeleteItem.id);
+      await handleDeleteProject(pendingDeleteItem.item);
       return;
     }
 
-    await handleDeleteTask(pendingDeleteItem.id);
+    await handleDeleteTask(pendingDeleteItem.item);
   };
 
   const handleStatusUpdate = async (taskId, nextStatus) => {
     playNeutralSound();
-    setIsBusy(true);
+    setBusyTaskId(taskId);
     setError("");
 
     try {
@@ -311,37 +440,28 @@ export default function DashboardPage() {
     } catch (updateError) {
       setError(updateError.message);
     } finally {
-      setIsBusy(false);
+      setBusyTaskId(null);
     }
   };
 
   const handleCompleteTask = async (taskId) => {
-    setIsBusy(true);
+    setBusyTaskId(taskId);
     setError("");
 
     try {
-      await api.deleteTask(token, taskId);
-
-      if (editingTaskId === taskId) {
-        resetTaskComposer();
-      }
-
-      if (completionAudioRef.current) {
-        completionAudioRef.current.currentTime = 0;
-        completionAudioRef.current.play().catch(() => {});
-      }
-
+      await api.updateTask(token, taskId, { status: "done" });
       await refreshTasks();
+      playSound(completionSoundUrl);
     } catch (updateError) {
       setError(updateError.message);
     } finally {
-      setIsBusy(false);
+      setBusyTaskId(null);
     }
   };
 
   const handleAssignToMe = async (taskId) => {
     playNeutralSound();
-    setIsBusy(true);
+    setBusyTaskId(taskId);
     setError("");
 
     try {
@@ -350,7 +470,7 @@ export default function DashboardPage() {
     } catch (assignmentError) {
       setError(assignmentError.message);
     } finally {
-      setIsBusy(false);
+      setBusyTaskId(null);
     }
   };
 
@@ -368,11 +488,6 @@ export default function DashboardPage() {
     setSelectedProjectId(String(projectId));
   };
 
-  const handleCancelDelete = () => {
-    playNeutralSound();
-    setPendingDeleteItem(null);
-  };
-
   const handleCancelEdit = () => {
     playNeutralSound();
     resetTaskComposer();
@@ -388,6 +503,27 @@ export default function DashboardPage() {
     signOut();
   };
 
+  const handleToggleMute = () => {
+    if (!isMuted) {
+      playNeutralSound();
+    }
+
+    setIsMuted((current) => !current);
+  };
+
+  const handleVolumeChange = (event) => {
+    setVolume(event.target.value);
+  };
+
+  const handleVolumeCommit = () => {
+    playNeutralSound();
+  };
+
+  const handleDismissUndo = () => {
+    playNeutralSound();
+    setUndoNotice(null);
+  };
+
   if (isBootstrapping) {
     return (
       <div className="page-shell centered-shell">
@@ -396,29 +532,66 @@ export default function DashboardPage() {
     );
   }
 
+  const deleteActionBusy =
+    pendingDeleteItem &&
+    ((pendingDeleteItem.type === "project" && busyProjectId === pendingDeleteItem.item.id) ||
+      (pendingDeleteItem.type === "task" && busyTaskId === pendingDeleteItem.item.id));
+
   return (
     <div className="dashboard-shell">
-      <audio preload="auto" ref={completionAudioRef} src={completionSoundUrl} />
-      <audio preload="auto" ref={warningAudioRef} src={warningSoundUrl} />
-
       {pendingDeleteItem ? (
         <div className="modal-overlay" role="presentation">
-          <div aria-labelledby="delete-item-title" aria-modal="true" className="confirm-modal glass-panel" role="dialog">
+          <div
+            aria-describedby="delete-item-copy"
+            aria-labelledby="delete-item-title"
+            aria-modal="true"
+            className="confirm-modal glass-panel"
+            role="dialog"
+          >
             <span className="eyebrow">Confirm Delete</span>
             <h2 id="delete-item-title">Delete this {pendingDeleteItem.type}?</h2>
-            <p className="muted-copy">
+            <p className="muted-copy" id="delete-item-copy">
               {pendingDeleteItem.type === "project"
-                ? `${pendingDeleteItem.title} and all of its actions will be removed permanently.`
-                : `${pendingDeleteItem.title} will be removed permanently.`}
+                ? `${pendingDeleteItem.item.name} and all of its actions will be hidden until you undo the deletion.`
+                : `${pendingDeleteItem.item.title} will be hidden until you undo the deletion.`}
             </p>
             <div className="modal-actions">
-              <button className="danger-link" disabled={isBusy} onClick={handleConfirmDelete} type="button">
+              <button
+                className="danger-link"
+                disabled={deleteActionBusy}
+                onClick={handleConfirmDelete}
+                ref={confirmDeleteButtonRef}
+                type="button"
+              >
                 {pendingDeleteItem.type === "project" ? "Delete Focus Area" : "Delete Task"}
               </button>
-              <button className="ghost-button" disabled={isBusy} onClick={handleCancelDelete} type="button">
+              <button
+                className="ghost-button"
+                disabled={deleteActionBusy}
+                onClick={() => closeDeleteDialog(true)}
+                ref={cancelDeleteButtonRef}
+                type="button"
+              >
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {undoNotice ? (
+        <div aria-live="polite" className="undo-toast glass-panel" role="status">
+          <div>
+            <strong>{undoNotice.type === "project" ? "Focus area deleted." : "Task deleted."}</strong>
+            <p>{undoNotice.title}</p>
+          </div>
+          <div className="undo-toast-actions">
+            <button className="ghost-button" disabled={isRestoringUndo} onClick={handleUndoDelete} type="button">
+              Undo
+            </button>
+            <button className="link-button" onClick={handleDismissUndo} type="button">
+              Dismiss
+            </button>
           </div>
         </div>
       ) : null}
@@ -428,10 +601,29 @@ export default function DashboardPage() {
           <span className="eyebrow">ADHD Focus Space</span>
           <h1>ADHD Focus Tracking System</h1>
           <p className="muted-copy">
-            Focus areas, next actions, status filters, and lightweight accountability in one view.
+            Focus areas, next actions, status filters, lightweight accountability, and visible completion history.
           </p>
         </div>
         <div className="user-actions">
+          <div className="sound-preferences">
+            <button className="ghost-button" onClick={handleToggleMute} type="button">
+              {isMuted ? "Unmute Sounds" : "Mute Sounds"}
+            </button>
+            <label className="sound-slider">
+              Volume
+              <input
+                aria-label="Sound volume"
+                max="1"
+                min="0"
+                onChange={handleVolumeChange}
+                onKeyUp={handleVolumeCommit}
+                onPointerUp={handleVolumeCommit}
+                step="0.05"
+                type="range"
+                value={volume}
+              />
+            </label>
+          </div>
           <div className="user-chip">
             <strong>{user?.name}</strong>
             <span>{user?.email}</span>
@@ -472,8 +664,8 @@ export default function DashboardPage() {
                 value={projectForm.description}
               />
             </label>
-            <button className="primary-button" disabled={isBusy} type="submit">
-              Create Focus Area
+            <button className="primary-button" disabled={isCreatingProject} type="submit">
+              {isCreatingProject ? "Creating..." : "Create Focus Area"}
             </button>
           </form>
 
@@ -493,8 +685,8 @@ export default function DashboardPage() {
                     </button>
                     <button
                       className="danger-link"
-                      disabled={isBusy}
-                      onClick={() => handlePromptDeleteProject(project)}
+                      disabled={busyProjectId === project.id}
+                      onClick={(event) => handlePromptDeleteProject(project, event.currentTarget)}
                       type="button"
                     >
                       Delete
@@ -550,8 +742,8 @@ export default function DashboardPage() {
               />
             </label>
             <div className="form-action-row">
-              <button className="primary-button" disabled={isBusy || !selectedProjectId} type="submit">
-                {editingTaskId ? "Save Action" : "Add Action"}
+              <button className="primary-button" disabled={isSavingTask || !selectedProjectId} type="submit">
+                {isSavingTask ? "Saving..." : editingTaskId ? "Save Action" : "Add Action"}
               </button>
               {editingTaskId ? (
                 <button className="link-button" onClick={handleCancelEdit} type="button">
@@ -565,53 +757,68 @@ export default function DashboardPage() {
             {tasks.length === 0 ? (
               <p className="empty-state">No actions match this view yet.</p>
             ) : (
-              tasks.map((task) => (
-                <article className="task-card" key={task.id}>
-                  <div className="task-card-header">
-                    <div className="task-copy">
-                      <div className="task-meta">
-                        <span className={`status-pill status-${task.status}`}>{task.status.replace("_", " ")}</span>
-                        <span className="mono-copy">#{task.id}</span>
-                      </div>
-                      <h3>{task.title}</h3>
-                      <p>{task.description || "No extra context added."}</p>
-                      <span className="muted-copy">{getAssigneeLabel(task, user)}</span>
-                    </div>
-                    <div className="task-card-tools">
-                      <button className="ghost-button" onClick={() => handleEditTask(task)} type="button">
-                        Edit
-                      </button>
-                      <button
-                        className="danger-link"
-                        disabled={isBusy}
-                        onClick={() => handlePromptDeleteTask(task)}
-                        type="button"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
+              tasks.map((task) => {
+                const taskIsBusy = busyTaskId === task.id;
 
-                  <div className="task-actions">
-                    {taskStatusActions.map((action) => (
+                return (
+                  <article className="task-card" key={task.id}>
+                    <div className="task-card-header">
+                      <div className="task-copy">
+                        <div className="task-meta">
+                          <span className={`status-pill status-${task.status}`}>{task.status.replace("_", " ")}</span>
+                          <span className="mono-copy">#{task.id}</span>
+                        </div>
+                        <h3>{task.title}</h3>
+                        <p>{task.description || "No extra context added."}</p>
+                        <span className="muted-copy">{getAssigneeLabel(task, user)}</span>
+                      </div>
+                      <div className="task-card-tools">
+                        <button className="ghost-button" disabled={taskIsBusy} onClick={() => handleEditTask(task)} type="button">
+                          Edit
+                        </button>
+                        <button
+                          className="danger-link"
+                          disabled={taskIsBusy}
+                          onClick={(event) => handlePromptDeleteTask(task, event.currentTarget)}
+                          type="button"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="task-actions">
+                      {taskStatusActions.map((action) => (
+                        <button
+                          className={task.status === action.value ? "ghost-button active" : "ghost-button"}
+                          disabled={taskIsBusy}
+                          key={action.value}
+                          onClick={() => handleStatusUpdate(task.id, action.value)}
+                          type="button"
+                        >
+                          {action.label}
+                        </button>
+                      ))}
                       <button
-                        className={task.status === action.value ? "ghost-button active" : "ghost-button"}
-                        key={action.value}
-                        onClick={() => handleStatusUpdate(task.id, action.value)}
+                        className={task.status === "done" ? "ghost-button active" : "ghost-button"}
+                        disabled={taskIsBusy || task.status === "done"}
+                        onClick={() => handleCompleteTask(task.id)}
                         type="button"
                       >
-                        {action.label}
+                        Done
                       </button>
-                    ))}
-                    <button className="ghost-button" onClick={() => handleCompleteTask(task.id)} type="button">
-                      Done
-                    </button>
-                    <button className="secondary-button" onClick={() => handleAssignToMe(task.id)} type="button">
-                      Assign to Me
-                    </button>
-                  </div>
-                </article>
-              ))
+                      <button
+                        className="secondary-button"
+                        disabled={taskIsBusy}
+                        onClick={() => handleAssignToMe(task.id)}
+                        type="button"
+                      >
+                        Assign to Me
+                      </button>
+                    </div>
+                  </article>
+                );
+              })
             )}
           </div>
         </section>

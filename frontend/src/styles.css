@@ -295,6 +295,31 @@ button:disabled {
   align-items: center;
 }
 
+.sound-preferences {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.7rem 0.85rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sound-preferences-compact {
+  margin: 1rem 0 1.25rem;
+}
+
+.sound-slider {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: rgba(246, 244, 236, 0.76);
+}
+
+.sound-slider input {
+  width: 8rem;
+}
+
 .user-chip {
   display: grid;
   gap: 0.15rem;
@@ -433,6 +458,36 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.undo-toast {
+  position: fixed;
+  right: 2rem;
+  bottom: 2rem;
+  z-index: 15;
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  width: min(100%, 28rem);
+  padding: 1rem 1.25rem;
+}
+
+.undo-toast strong,
+.undo-toast p {
+  margin: 0;
+}
+
+.undo-toast p {
+  margin-top: 0.25rem;
+  color: rgba(246, 244, 236, 0.72);
+}
+
+.undo-toast-actions {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .task-header {
   display: flex;
   justify-content: space-between;
@@ -536,5 +591,18 @@ button:disabled {
   .auth-card,
   .panel-stack {
     padding: 1rem;
+  }
+
+  .undo-toast {
+    right: 1rem;
+    bottom: 1rem;
+    left: 1rem;
+    width: auto;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .sound-slider input {
+    width: 100%;
   }
 }
