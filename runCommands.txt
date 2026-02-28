@@ -3,6 +3,16 @@
 # Open separate terminals for backend and frontend.
 
 ==================================================
+ONE-CLICK LOCAL DEV (Windows)
+==================================================
+
+cd d:\Task-Tracking-System
+.\start-dev.bat
+
+This opens separate backend and frontend windows, installs missing
+dependencies when needed, and starts both dev servers.
+
+==================================================
 BACKEND (Terminal 1)
 ==================================================
 
