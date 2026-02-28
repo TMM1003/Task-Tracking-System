@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
@@ -23,8 +23,9 @@ const statusOptions = [
 const taskStatusActions = [
   { value: "todo", label: "Reset" },
   { value: "in_progress", label: "Start" },
-  { value: "done", label: "Done" },
 ];
+
+const completionSoundUrl = `${import.meta.env.BASE_URL}TaskCompleteSound.mp3`;
 
 function getAssigneeLabel(task, user) {
   if (!task.assignee) {
@@ -40,6 +41,7 @@ function getAssigneeLabel(task, user) {
 
 export default function DashboardPage() {
   const { token, user, signOut } = useAuth();
+  const completionAudioRef = useRef(null);
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -260,6 +262,30 @@ export default function DashboardPage() {
     }
   };
 
+  const handleCompleteTask = async (taskId) => {
+    setIsBusy(true);
+    setError("");
+
+    try {
+      await api.deleteTask(token, taskId);
+
+      if (editingTaskId === taskId) {
+        resetTaskComposer();
+      }
+
+      if (completionAudioRef.current) {
+        completionAudioRef.current.currentTime = 0;
+        completionAudioRef.current.play().catch(() => {});
+      }
+
+      await refreshTasks();
+    } catch (updateError) {
+      setError(updateError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleAssignToMe = async (taskId) => {
     setIsBusy(true);
     setError("");
@@ -292,6 +318,8 @@ export default function DashboardPage() {
 
   return (
     <div className="dashboard-shell">
+      <audio preload="auto" ref={completionAudioRef} src={completionSoundUrl} />
+
       <header className="top-bar">
         <div>
           <span className="eyebrow">ADHD Focus Space</span>
@@ -476,6 +504,9 @@ export default function DashboardPage() {
                         {action.label}
                       </button>
                     ))}
+                    <button className="ghost-button" onClick={() => handleCompleteTask(task.id)} type="button">
+                      Done
+                    </button>
                     <button className="secondary-button" onClick={() => handleAssignToMe(task.id)} type="button">
                       Assign to Me
                     </button>
